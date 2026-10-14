@@ -146,14 +146,16 @@ jobs:
           rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
           rustup default "$RUST_TOOLCHAIN"
 
-      # setup-beam does not support macOS, so this job runs whatever Elixir Homebrew ships.
-      - name: Install Elixir
+      # setup-beam does not support macOS, so this job runs whatever Elixir Homebrew ships. GnuPG
+      # from Homebrew is a newer release than the Linux runner's, so the interop test covers both.
+      - name: Install Elixir and GnuPG
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
         run: |
-          brew install elixir
+          brew install elixir gnupg
           elixir --version
+          gpg --version | head -1
 
       - name: mix test
-        run: mix test
+        run: mix test --include gpg_agent
