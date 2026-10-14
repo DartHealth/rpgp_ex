@@ -25,6 +25,10 @@ defmodule RpgpEx.Backend do
   @doc "Lists the key IDs a message is encrypted to, without decrypting it. Returns `\"recipients\"`."
   @callback recipients(path :: Path.t(), keyword()) :: result(%{String.t() => term()})
 
-  @doc "Describes an armored public key."
+  @doc """
+  Describes an armored public key: `"fingerprint"`, `"key_id"`, `"algorithm"`, `"created_at"`
+  and `"expires_at"` (`DateTime`, or `nil` if it never expires), `"revoked"`, `"can_encrypt"`,
+  `"encryption_key_id"` (the key a message would be encrypted to, or `nil`) and `"subkeys"`.
+  """
   @callback inspect_key(armored :: String.t(), keyword()) :: result(%{String.t() => term()})
 end

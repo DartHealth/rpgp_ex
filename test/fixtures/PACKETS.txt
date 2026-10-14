@@ -16,6 +16,7 @@ rsa4096.seipdv1.random.bin.asc	:encrypted data packet
 rsa4096.seipdv1.random.bin.gpg	:encrypted data packet
 rsa4096.seipdv1.small.txt.asc	:encrypted data packet
 rsa4096.seipdv1.small.txt.gpg	:encrypted data packet
+rsaonly.seipdv1.small.txt.gpg	:encrypted data packet
 stranger.seipdv1.small.txt.gpg	:encrypted data packet
 tampered.ocb.random.bin.gpg	:ocb encrypted packet
 tampered.seipdv1.random.bin.gpg	:encrypted data packet

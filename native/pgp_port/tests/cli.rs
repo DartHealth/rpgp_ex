@@ -61,8 +61,128 @@ fn inspect_key_picks_the_encryption_subkey() {
         assert_eq!(v["fingerprint"].as_str().unwrap().len(), 40, "{v}");
         let subkeys = v["subkeys"].as_array().unwrap();
         assert_eq!(subkeys.len(), 1, "{v}");
-        assert_eq!(v["encryption_subkey"], subkeys[0]["key_id"], "{v}");
+        assert_eq!(v["encryption_key_id"], subkeys[0]["key_id"], "{v}");
     }
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+#[test]
+fn inspect_key_reports_dates_revocation_and_capability() {
+    let v = inspect("cv25519.pub.asc");
+    assert!(v["created_at"].as_u64().unwrap() <= now(), "{v}");
+    assert_eq!(v["expires_at"], Value::Null, "{v}");
+    assert_eq!(v["revoked"], json!(false), "{v}");
+    assert_eq!(v["can_encrypt"], json!(true), "{v}");
+    let sub = &v["subkeys"][0];
+    assert_eq!(sub["can_encrypt"], json!(true), "{v}");
+    assert_eq!(sub["revoked"], json!(false), "{v}");
+    assert_eq!(sub["expires_at"], Value::Null, "{v}");
+    assert_eq!(v["encryption_key_id"], sub["key_id"], "{v}");
+}
+
+#[test]
+fn inspect_key_explains_why_a_key_cannot_encrypt() {
+    let v = inspect("expired-primary.pub.asc");
+    assert!(v["expires_at"].as_u64().unwrap() < now(), "{v}");
+    assert_eq!(v["can_encrypt"], json!(false), "{v}");
+    assert_eq!(v["encryption_key_id"], Value::Null, "{v}");
+
+    let v = inspect("expired-sub.pub.asc");
+    assert_eq!(v["expires_at"], Value::Null, "{v}");
+    assert!(v["subkeys"][0]["expires_at"].as_u64().unwrap() < now(), "{v}");
+    assert_eq!(v["subkeys"][0]["can_encrypt"], json!(false), "{v}");
+    assert_eq!(v["can_encrypt"], json!(false), "{v}");
+
+    let v = inspect("revoked-primary.pub.asc");
+    assert_eq!(v["revoked"], json!(true), "{v}");
+    assert_eq!(v["can_encrypt"], json!(false), "{v}");
+
+    let v = inspect("revoked-sub.pub.asc");
+    assert_eq!(v["revoked"], json!(false), "{v}");
+    assert_eq!(v["subkeys"][0]["revoked"], json!(true), "{v}");
+    assert_eq!(v["can_encrypt"], json!(false), "{v}");
+
+    let v = inspect("signonly.pub.asc");
+    assert_eq!(v["subkeys"], json!([]), "{v}");
+    assert_eq!(v["can_encrypt"], json!(false), "{v}");
+    assert_eq!(v["encryption_key_id"], Value::Null, "{v}");
+}
+
+/// A single RSA-4096 primary key flagged for encryption, with no subkeys, as some partners use.
+#[test]
+fn primary_only_key_is_encrypted_to_directly() {
+    let v = inspect("rsaonly.pub.asc");
+    assert_eq!(v["subkeys"], json!([]), "{v}");
+    assert_eq!(v["can_encrypt"], json!(true), "{v}");
+    assert_eq!(v["encryption_key_id"], v["key_id"], "{v}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let enc = dir.path().join("to-rsaonly.pgp");
+    let (e, status) = encrypt(&fixture("plain/small.txt"), &enc, &["rsaonly.pub.asc"], false);
+    assert_eq!(status, 0, "{e}");
+    assert_eq!(e["recipients"], json!([v["key_id"]]), "{e}");
+    let (r, status) = run(&["recipients", "--in", p(&enc)], None);
+    assert_eq!(status, 0, "{r}");
+    assert_eq!(r["recipients"], json!([v["key_id"]]), "{r}");
+
+    for (msg, label) in [
+        (enc.clone(), "ours"),
+        (fixture("msg/rsaonly.seipdv1.small.txt.gpg"), "gpg's"),
+    ] {
+        let out = dir.path().join(format!("{label}.out"));
+        let (d, status) = decrypt_path(&msg, &["rsaonly.sec.asc"], None, &out);
+        assert_eq!(status, 0, "{label}: {d}");
+        assert_eq!(
+            std::fs::read(&out).unwrap(),
+            std::fs::read(fixture("plain/small.txt")).unwrap(),
+            "{label}"
+        );
+    }
+}
+
+#[test]
+fn encrypting_to_an_unusable_key_fails_with_a_specific_code() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    for (name, code) in [
+        ("expired-sub", "key_expired"),
+        ("expired-primary", "key_expired"),
+        ("revoked-sub", "key_revoked"),
+        ("revoked-primary", "key_revoked"),
+        ("signonly", "no_encryption_key"),
+    ] {
+        let out = dir.path().join(name);
+        let (v, status) = encrypt(&fixture("plain/small.txt"), &out, &[&format!("{name}.pub.asc")], false);
+        if status != 1 || v["error"] != json!(code) {
+            failures.push(format!("{name}: want {code}, got status={status} {v}"));
+        }
+        if out.exists() || partial(&out).exists() {
+            failures.push(format!("{name}: OUT or OUT.partial left behind"));
+        }
+    }
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// One unusable recipient fails the whole call: a message must reach every recipient it names.
+#[test]
+fn one_unusable_recipient_fails_the_whole_encryption() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out");
+    let (v, status) = encrypt(
+        &fixture("plain/small.txt"),
+        &out,
+        &["cv25519.pub.asc", "revoked-primary.pub.asc"],
+        false,
+    );
+    assert_eq!(status, 1, "{v}");
+    assert_eq!(v["error"], json!("key_revoked"), "{v}");
+    assert!(!out.exists());
 }
 
 #[test]
@@ -74,11 +194,11 @@ fn recipients_lists_every_pkesk_key_id() {
     assert_eq!(status, 0, "{v}");
     let mut got: Vec<String> = serde_json::from_value(v["recipients"].clone()).unwrap();
     let mut want = vec![
-        inspect("cv25519.pub.asc")["encryption_subkey"]
+        inspect("cv25519.pub.asc")["encryption_key_id"]
             .as_str()
             .unwrap()
             .to_string(),
-        inspect("rsa4096.pub.asc")["encryption_subkey"]
+        inspect("rsa4096.pub.asc")["encryption_key_id"]
             .as_str()
             .unwrap()
             .to_string(),
@@ -228,7 +348,7 @@ fn encrypt_round_trips_through_our_decrypt() {
         assert_eq!(status, 0, "{v}");
         assert_eq!(
             v["recipients"][0],
-            inspect(&format!("{k}.pub.asc"))["encryption_subkey"]
+            inspect(&format!("{k}.pub.asc"))["encryption_key_id"]
         );
         if armor {
             assert!(

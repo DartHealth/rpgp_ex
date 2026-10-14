@@ -84,9 +84,37 @@ defmodule RpgpExTest do
   end
 
   test "inspect_key/1 reports the chosen encryption subkey" do
-    assert {:ok, %{"fingerprint" => fpr, "encryption_subkey" => sub}} = RpgpEx.inspect_key(key("cv25519.pub.asc"))
+    assert {:ok, %{"fingerprint" => fpr, "encryption_key_id" => sub}} = RpgpEx.inspect_key(key("cv25519.pub.asc"))
     assert byte_size(fpr) == 40
     assert byte_size(sub) == 16
+  end
+
+  test "inspect_key/1 returns timestamps as DateTimes" do
+    assert {:ok, %{"created_at" => %DateTime{}, "expires_at" => nil, "subkeys" => [subkey]}} =
+             RpgpEx.inspect_key(key("cv25519.pub.asc"))
+
+    assert %{"created_at" => %DateTime{}, "expires_at" => nil} = subkey
+
+    assert {:ok, %{"expires_at" => %DateTime{} = expired, "can_encrypt" => false}} =
+             RpgpEx.inspect_key(key("expired-primary.pub.asc"))
+
+    assert DateTime.before?(expired, DateTime.utc_now())
+  end
+
+  test "encrypt_file/4 says why a recipient key cannot be used", %{tmp_dir: tmp} do
+    out = Path.join(tmp, "out")
+
+    for {name, code} <- [
+          {"expired-sub", :key_expired},
+          {"revoked-primary", :key_revoked},
+          {"signonly", :no_encryption_key}
+        ] do
+      assert {:error, %Error{code: ^code}} =
+               RpgpEx.encrypt_file(fixture("plain/small.txt"), out, [key("#{name}.pub.asc")]),
+             name
+
+      refute File.exists?(out)
+    end
   end
 
   test "exit 1 without a JSON line is :crashed" do
@@ -240,12 +268,23 @@ defmodule RpgpExTest do
     # an export/import round trip (keygrip mismatch).
     gpg_batch = ~w(--batch --quiet --pinentry-mode loopback --passphrase) ++ [""]
 
-    for {algo, primary} <- [{"cv25519", "ed25519"}, {"rsa4096", "rsa4096"}] do
+    # {name, primary algorithm, primary usage, encryption subkey algorithm or nil}. The last is a
+    # single RSA-4096 primary key flagged for encryption, with no subkeys.
+    shapes = [
+      {"cv25519", "ed25519", "sign,cert", "cv25519"},
+      {"rsa4096", "rsa4096", "sign,cert", "rsa4096"},
+      {"rsaonly", "rsa4096", "sign,cert,encr", nil}
+    ]
+
+    for {algo, primary, usage, subkey} <- shapes do
       uid = "Smoke #{algo} <#{algo}@smoke.test>"
-      {_, 0} = System.cmd("gpg", gpg_batch ++ ["--quick-gen-key", uid, primary, "sign,cert", "never"], env: env)
+      {_, 0} = System.cmd("gpg", gpg_batch ++ ["--quick-gen-key", uid, primary, usage, "never"], env: env)
       {listing, 0} = System.cmd("gpg", ["--with-colons", "--list-keys", "#{algo}@smoke.test"], env: env)
       [fpr | _] = for "fpr:" <> _ = line <- String.split(listing, "\n"), do: Enum.at(String.split(line, ":"), 9)
-      {_, 0} = System.cmd("gpg", gpg_batch ++ ["--quick-add-key", fpr, algo, "encr", "never"], env: env)
+
+      if subkey,
+        do: {_, 0} = System.cmd("gpg", gpg_batch ++ ["--quick-add-key", fpr, subkey, "encr", "never"], env: env)
+
       {public_key, 0} = System.cmd("gpg", ["--armor", "--export", fpr], env: env)
 
       enc = Path.join(tmp, "#{algo}.gpg")

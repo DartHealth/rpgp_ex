@@ -28,5 +28,20 @@ defmodule RpgpEx.Port do
   def recipients(path, opts \\ []), do: Runner.run(["recipients", "--in", path], nil, opts)
 
   @impl true
-  def inspect_key(armored, opts \\ []), do: Runner.run(["inspect-key"], %{key: armored}, opts)
+  def inspect_key(armored, opts \\ []) do
+    with {:ok, info} <- Runner.run(["inspect-key"], %{key: armored}, opts) do
+      {:ok, info |> with_datetimes() |> Map.update("subkeys", [], &Enum.map(&1, fn sub -> with_datetimes(sub) end))}
+    end
+  end
+
+  # pgp_port reports Unix seconds; `expires_at` is nil for a key that never expires.
+  defp with_datetimes(info) do
+    Map.new(info, fn
+      {key, seconds} when key in ["created_at", "expires_at"] and is_integer(seconds) ->
+        {key, DateTime.from_unix!(seconds)}
+
+      pair ->
+        pair
+    end)
+  end
 end

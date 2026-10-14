@@ -12,6 +12,9 @@ defmodule RpgpEx.Error do
     * `:malformed` - the input is not a well-formed OpenPGP message or key
     * `:io` - an operating-system error reading or writing a file
     * `:usage` - invalid arguments, e.g. no recipients
+    * `:key_expired` - a recipient key, or its primary key, has expired
+    * `:key_revoked` - a recipient key, or its primary key, is revoked
+    * `:no_encryption_key` - a recipient certificate has no key that can encrypt
     * `:cancelled` - reserved for a future in-process backend; never returned today
 
   Codes added on the Elixir side:
@@ -29,7 +32,8 @@ defmodule RpgpEx.Error do
 
   # Keep in sync with pgp_port's error::Code. Never String.to_atom untrusted output.
   @codes Map.new(
-           ~w(no_matching_key bad_passphrase integrity_check_failed unsupported malformed io usage cancelled)a,
+           ~w(no_matching_key bad_passphrase integrity_check_failed unsupported malformed io usage
+             key_expired key_revoked no_encryption_key cancelled)a,
            &{Atom.to_string(&1), &1}
          )
 

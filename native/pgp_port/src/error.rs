@@ -12,6 +12,12 @@ pub enum Code {
     Malformed,
     Io,
     Usage,
+    /// A recipient key (or its primary key) has expired.
+    KeyExpired,
+    /// A recipient key (or its primary key) is revoked.
+    KeyRevoked,
+    /// A recipient certificate has no key that can encrypt.
+    NoEncryptionKey,
 }
 
 impl Code {
@@ -24,6 +30,9 @@ impl Code {
             Code::Malformed => "malformed",
             Code::Io => "io",
             Code::Usage => "usage",
+            Code::KeyExpired => "key_expired",
+            Code::KeyRevoked => "key_revoked",
+            Code::NoEncryptionKey => "no_encryption_key",
         }
     }
 }

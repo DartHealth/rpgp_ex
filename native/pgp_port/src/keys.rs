@@ -64,46 +64,49 @@ impl EncryptionKey<'_> {
     }
 }
 
-/// Like GnuPG: the newest usable encryption subkey, else the primary key if usable.
-pub fn encryption_key(cert: &SignedPublicKey) -> Result<EncryptionKey<'_>, Failure> {
-    if let Ok(sk) = encryption_subkey(cert) {
-        return Ok(EncryptionKey::Subkey(sk));
-    }
-    if primary_usable_for_encryption(cert, Timestamp::now().as_secs()) {
-        return Ok(EncryptionKey::Primary(&cert.primary_key));
-    }
-    Err(Failure::new(Code::Unsupported, "no usable encryption key"))
+/// What a key's self-signatures say about it, read without deciding whether it can be used.
+struct Status {
+    revoked: bool,
+    /// Unix seconds; `None` if the key never expires.
+    expires_at: Option<u32>,
+    /// Flagged for encryption and of an encryption-capable algorithm.
+    encrypts: bool,
+    /// Its binding or self-signature verifies against the primary key.
+    bound: bool,
 }
 
-/// The newest subkey whose binding (and any revocation) signatures verify against the
-/// primary key, that is flagged for encryption, not revoked and not expired.
-/// PoC limit: the primary key's own revocation/expiry is not checked on this path.
-pub fn encryption_subkey(cert: &SignedPublicKey) -> Result<&SignedPublicSubKey, Failure> {
-    let now = Timestamp::now().as_secs();
-    cert.public_subkeys
-        .iter()
-        .filter(|sk| usable_for_encryption(&cert.primary_key, sk, now))
-        .max_by_key(|sk| sk.key.created_at().as_secs())
-        .ok_or_else(|| Failure::new(Code::Unsupported, "no usable encryption subkey"))
+impl Status {
+    fn expired(&self, now: u32) -> bool {
+        self.expires_at.is_some_and(|t| t <= now)
+    }
+
+    fn usable(&self, now: u32) -> bool {
+        self.bound && self.encrypts && !self.revoked && !self.expired(now)
+    }
 }
 
-/// The primary key is usable if no key revocation verifies and its newest verifying
-/// self-signature (user-ID certification or direct-key) flags it for encryption and
-/// has not expired it. PoC limit: GnuPG prefers the primary user ID's self-signature;
-/// this takes the newest across all user IDs.
-fn primary_usable_for_encryption(cert: &SignedPublicKey, now: u32) -> bool {
+fn expiry(created: u32, sig: &pgp::packet::Signature) -> Option<u32> {
+    match sig.key_expiration_time() {
+        Some(d) if d.as_secs() > 0 => Some(created.saturating_add(d.as_secs())),
+        _ => None,
+    }
+}
+
+fn encryption_flags(sig: &pgp::packet::Signature) -> bool {
+    let flags = sig.key_flags();
+    flags.encrypt_comms() || flags.encrypt_storage()
+}
+
+/// The primary key's status from its newest verifying self-signature (user-ID certification or
+/// direct-key) and any verifying key revocation. Limit: GnuPG prefers the primary user ID's
+/// self-signature; this takes the newest across all user IDs.
+fn primary_status(cert: &SignedPublicKey) -> Status {
     let primary = &cert.primary_key;
-    if !primary.algorithm().can_encrypt() {
-        return false;
-    }
-    if cert
+    let revoked = cert
         .details
         .revocation_signatures
         .iter()
-        .any(|s| s.verify_key(primary).is_ok())
-    {
-        return false;
-    }
+        .any(|s| s.verify_key(primary).is_ok());
     let user_sigs = cert.details.users.iter().flat_map(|u| {
         u.signatures
             .iter()
@@ -114,66 +117,121 @@ fn primary_usable_for_encryption(cert: &SignedPublicKey, now: u32) -> bool {
         .direct_signatures
         .iter()
         .filter(|s| s.verify_key(primary).is_ok());
-    let Some(sig) = user_sigs
+    let newest = user_sigs
         .chain(direct_sigs)
-        .max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0))
-    else {
-        return false;
-    };
-    let flags = sig.key_flags();
-    if !(flags.encrypt_comms() || flags.encrypt_storage()) {
-        return false;
-    }
-    match sig.key_expiration_time() {
-        Some(d) if d.as_secs() > 0 => primary.created_at().as_secs().saturating_add(d.as_secs()) > now,
-        _ => true,
+        .max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0));
+    match newest {
+        Some(sig) => Status {
+            revoked,
+            expires_at: expiry(primary.created_at().as_secs(), sig),
+            encrypts: encryption_flags(sig) && primary.algorithm().can_encrypt(),
+            bound: true,
+        },
+        None => Status {
+            revoked,
+            expires_at: None,
+            encrypts: false,
+            bound: false,
+        },
     }
 }
 
-fn usable_for_encryption(primary: &PublicKey, sk: &SignedPublicSubKey, now: u32) -> bool {
-    // Verifies every binding and revocation signature on the subkey, so a revocation
-    // counted below is a genuine one (and a forged one makes the subkey unusable).
-    if sk.verify_bindings(primary).is_err() {
-        return false;
-    }
-    if sk
-        .signatures
-        .iter()
-        .any(|s| s.typ() == Some(SignatureType::SubkeyRevocation))
-    {
-        return false;
-    }
-    let Some(binding) = sk
+/// A subkey's status from its newest binding signature. `verify_bindings` checks every binding
+/// and revocation signature on the subkey, so a revocation counted here is genuine, and a forged
+/// signature leaves the subkey unbound (unusable).
+fn subkey_status(primary: &PublicKey, sk: &SignedPublicSubKey) -> Status {
+    let bound = sk.verify_bindings(primary).is_ok();
+    let revoked = bound
+        && sk
+            .signatures
+            .iter()
+            .any(|s| s.typ() == Some(SignatureType::SubkeyRevocation));
+    let binding = sk
         .signatures
         .iter()
         .filter(|s| s.typ() == Some(SignatureType::SubkeyBinding))
-        .max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0))
-    else {
-        return false;
-    };
-    let flags = binding.key_flags();
-    if !(flags.encrypt_comms() || flags.encrypt_storage()) || !sk.key.algorithm().can_encrypt() {
-        return false;
+        .max_by_key(|s| s.created().map(|t| t.as_secs()).unwrap_or(0));
+    match binding {
+        Some(sig) if bound => Status {
+            revoked,
+            expires_at: expiry(sk.key.created_at().as_secs(), sig),
+            encrypts: encryption_flags(sig) && sk.key.algorithm().can_encrypt(),
+            bound,
+        },
+        _ => Status {
+            revoked,
+            expires_at: None,
+            encrypts: false,
+            bound: false,
+        },
     }
-    match binding.key_expiration_time() {
-        Some(d) if d.as_secs() > 0 => sk.key.created_at().as_secs().saturating_add(d.as_secs()) > now,
-        _ => true,
+}
+
+/// Like GnuPG: the newest usable encryption subkey, else the primary key if it is usable for
+/// encryption itself. A revoked or expired primary key makes the whole certificate unusable.
+pub fn encryption_key(cert: &SignedPublicKey) -> Result<EncryptionKey<'_>, Failure> {
+    let now = Timestamp::now().as_secs();
+    let primary = primary_status(cert);
+    if primary.revoked {
+        return Err(Failure::new(Code::KeyRevoked, "the primary key is revoked"));
+    }
+    if primary.expired(now) {
+        return Err(Failure::new(Code::KeyExpired, "the primary key has expired"));
+    }
+    let subkeys: Vec<(&SignedPublicSubKey, Status)> = cert
+        .public_subkeys
+        .iter()
+        .map(|sk| (sk, subkey_status(&cert.primary_key, sk)))
+        .collect();
+    if let Some((sk, _)) = subkeys
+        .iter()
+        .filter(|(_, st)| st.usable(now))
+        .max_by_key(|(sk, _)| sk.key.created_at().as_secs())
+    {
+        return Ok(EncryptionKey::Subkey(sk));
+    }
+    if primary.usable(now) {
+        return Ok(EncryptionKey::Primary(&cert.primary_key));
+    }
+    // Nothing usable: report why, looking only at keys that could otherwise have encrypted.
+    let candidates: Vec<&Status> = subkeys
+        .iter()
+        .map(|(_, st)| st)
+        .chain(std::iter::once(&primary))
+        .filter(|st| st.bound && st.encrypts)
+        .collect();
+    if candidates.iter().any(|st| st.expired(now)) {
+        Err(Failure::new(
+            Code::KeyExpired,
+            "every encryption key has expired or is revoked",
+        ))
+    } else if candidates.iter().any(|st| st.revoked) {
+        Err(Failure::new(Code::KeyRevoked, "every encryption key is revoked"))
+    } else {
+        Err(Failure::new(
+            Code::NoEncryptionKey,
+            "the key has no encryption-capable (sub)key",
+        ))
     }
 }
 
 pub fn inspect(req: &InspectRequest) -> Result<Value, Failure> {
     let cert = parse_public(&req.key)?;
     let now = Timestamp::now().as_secs();
+    let primary = primary_status(&cert);
     let subkeys: Vec<Value> = cert
         .public_subkeys
         .iter()
         .map(|sk| {
+            let st = subkey_status(&cert.primary_key, sk);
             json!({
                 "key_id": key_id_hex(sk.key.legacy_key_id()),
                 "fingerprint": format!("{:X}", sk.key.fingerprint()),
                 "algorithm": format!("{:?}", sk.key.algorithm()),
                 "created_at": sk.key.created_at().as_secs(),
-                "usable_for_encryption": usable_for_encryption(&cert.primary_key, sk, now),
+                "expires_at": st.expires_at,
+                "revoked": st.revoked,
+                "can_encrypt": st.usable(now),
             })
         })
         .collect();
@@ -182,8 +240,12 @@ pub fn inspect(req: &InspectRequest) -> Result<Value, Failure> {
         "fingerprint": format!("{:X}", cert.primary_key.fingerprint()),
         "key_id": key_id_hex(cert.primary_key.legacy_key_id()),
         "algorithm": format!("{:?}", cert.primary_key.algorithm()),
+        "created_at": cert.primary_key.created_at().as_secs(),
+        "expires_at": primary.expires_at,
+        "revoked": primary.revoked,
+        "can_encrypt": chosen.is_some(),
+        // The primary key's own ID when it is the key a message would be encrypted to.
+        "encryption_key_id": chosen,
         "subkeys": subkeys,
-        // Kept under its old name; it is the primary key's ID when no subkey is usable.
-        "encryption_subkey": chosen,
     }))
 }

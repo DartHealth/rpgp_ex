@@ -37,7 +37,10 @@ defmodule RpgpEx do
   @spec recipients(Path.t(), keyword()) :: RpgpEx.Backend.result(map())
   def recipients(path, opts \\ []), do: backend().recipients(path, opts)
 
-  @doc "Describes an armored public key: fingerprint, key ID, algorithm and subkeys."
+  @doc """
+  Describes an armored public key without using it: fingerprint, key ID, algorithm, creation and
+  expiry dates, revocation, whether it can be encrypted to, and the same for each subkey.
+  """
   @spec inspect_key(String.t(), keyword()) :: RpgpEx.Backend.result(map())
   def inspect_key(armored, opts \\ []), do: backend().inspect_key(armored, opts)
 
