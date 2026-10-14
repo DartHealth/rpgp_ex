@@ -153,19 +153,14 @@ defmodule RpgpExTest do
     # ~200 KB, several times a pipe buffer: the write can fail with EPIPE.
     keys = List.duplicate(key("rsa4096.sec.asc"), 30)
 
-    # Whether a run hits EPIPE or sees the exit status first is timing-dependent; the test
-    # process surviving to collect the results is the point.
-    messages =
-      for _ <- 1..10 do
-        assert {:error, %Error{code: :crashed, message: message}} =
-                 RpgpEx.decrypt_file(fixture("msg/cv25519.seipdv1.small.txt.gpg"), out, keys,
-                   binary: fake("exit_early.sh")
-                 )
-
-        message
-      end
-
-    assert "port exited: :epipe" in messages, inspect(Enum.frequencies(messages))
+    # The fake closes stdin before it exits, so the write fails with EPIPE every time. (With a
+    # fake that just exits, the exit status sometimes arrives first and EPIPE is never tested.)
+    for _ <- 1..5 do
+      assert {:error, %Error{code: :crashed, message: "port exited: :epipe"}} =
+               RpgpEx.decrypt_file(fixture("msg/cv25519.seipdv1.small.txt.gpg"), out, keys,
+                 binary: fake("close_stdin_early.sh")
+               )
+    end
   end
 
   test "killing the caller kills the process and removes partial output", %{tmp_dir: tmp} do
