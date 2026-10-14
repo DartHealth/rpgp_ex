@@ -13,6 +13,13 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    # pgp_port passes its random number generator to rPGP, so rand must stay on the release rPGP
+    # depends on (0.8 for pgp 0.20 and 0.21). Move it together with a pgp upgrade.
+    ignore:
+      - dependency-name: rand
+        update-types:
+          - version-update:semver-major
+          - version-update:semver-minor
     # rPGP is 0.x: each minor release may break the API and needs the full fixture and interop
     # suite, so it gets a pull request of its own.
     groups:
