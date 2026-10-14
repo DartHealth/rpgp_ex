@@ -48,6 +48,14 @@ fn unknown_command_is_a_usage_error() {
     assert_eq!(v["error"], json!("usage"));
 }
 
+#[test]
+fn version_reports_the_crate_version_without_reading_stdin() {
+    // No request line: --version must answer without waiting for one.
+    let (v, status) = run(&["--version"], None);
+    assert_eq!(status, 0, "{v}");
+    assert_eq!(v, json!({"ok": true, "version": env!("CARGO_PKG_VERSION")}));
+}
+
 fn inspect(name: &str) -> Value {
     let (v, status) = run(&["inspect-key"], Some(json!({"key": key(name)})));
     assert_eq!(status, 0, "{v}");

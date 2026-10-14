@@ -10,6 +10,8 @@ defmodule RpgpEx.MixProject do
       version: @version,
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
+      # :pgp_port installs the native executable once the Elixir code is compiled.
+      compilers: Mix.compilers() ++ [:pgp_port],
       deps: deps(),
       description: "OpenPGP encryption and decryption backed by rPGP, a pure-Rust implementation",
       package: package(),
@@ -17,11 +19,25 @@ defmodule RpgpEx.MixProject do
     ]
   end
 
-  def application, do: [extra_applications: [:logger]]
+  def application do
+    [
+      mod: {RpgpEx.Application, []},
+      # :inets, :ssl and :public_key download pgp_port at compile time only.
+      extra_applications: [:logger, inets: :optional, ssl: :optional, public_key: :optional]
+    ]
+  end
 
   defp deps, do: []
 
   defp package do
-    [licenses: ["MIT", "Apache-2.0"], links: %{"GitHub" => @source_url}]
+    [
+      licenses: ["MIT", "Apache-2.0"],
+      links: %{"GitHub" => @source_url},
+      # native/pgp_port is the cargo fallback; checksums-pgp_port.exs verifies the downloads.
+      files: ~w(
+        lib mix.exs README.md LICENSE-MIT LICENSE-APACHE checksums-pgp_port.exs
+        native/pgp_port/src native/pgp_port/Cargo.toml native/pgp_port/Cargo.lock native/pgp_port/.cargo
+      )
+    ]
   end
 end

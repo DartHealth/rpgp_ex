@@ -184,7 +184,8 @@ defmodule RpgpEx.Port.Runner do
     if partial = opts[:partial], do: File.rm(partial)
   end
 
-  defp binary(opts) do
+  @doc false
+  def binary(opts) do
     opts[:binary] || Application.get_env(:rpgp_ex, :pgp_port_path) ||
       Application.app_dir(:rpgp_ex, "priv/bin/pgp_port")
   end
