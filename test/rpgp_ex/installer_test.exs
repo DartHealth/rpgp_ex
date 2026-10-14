@@ -113,12 +113,23 @@ defmodule RpgpEx.InstallerTest do
     test "builds from source with cargo", %{tmp_dir: tmp_dir} do
       root = Path.join(tmp_dir, "package")
       File.mkdir_p!(Path.join(root, "native/pgp_port"))
-      opts = [dest: Path.join(tmp_dir, "priv/bin/pgp_port"), root: root, target: @target, cargo: fake_cargo(tmp_dir)]
+      opts = [dest: Path.join(tmp_dir, "priv/bin/pgp_port"), root: root, target: nil, cargo: fake_cargo(tmp_dir)]
 
       assert Installer.install(opts) == {:ok, :built}
       assert File.read!(opts[:dest]) == "#!/bin/sh\necho built\n"
       assert File.stat!(opts[:dest]).mode |> Bitwise.band(0o777) == 0o755
       assert File.read!(Path.join(tmp_dir, "cargo-args")) == "build --release --locked\n"
+    end
+
+    test "builds for an explicit target, never silently for the host", %{tmp_dir: tmp_dir} do
+      root = Path.join(tmp_dir, "package")
+      File.mkdir_p!(Path.join(root, "native/pgp_port"))
+      target = "riscv64gc-unknown-linux-gnu"
+      opts = [dest: Path.join(tmp_dir, "priv/bin/pgp_port"), root: root, target: target, cargo: fake_cargo(tmp_dir)]
+
+      assert Installer.install(opts) == {:ok, :built}
+      assert File.read!(Path.join(tmp_dir, "cargo-args")) == "build --release --locked --target #{target}\n"
+      assert File.read!(opts[:dest]) == "#!/bin/sh\necho built for #{target}\n"
     end
 
     test "build_from_source skips the download even when an artifact exists", %{tmp_dir: tmp_dir} do
@@ -215,15 +226,16 @@ defmodule RpgpEx.InstallerTest do
 
   defp write_checksums(root, map), do: File.write!(Path.join(root, "checksums-pgp_port.exs"), inspect(map))
 
-  # Records its arguments and writes target/release/pgp_port, as cargo would.
+  # Records its arguments and writes target/[TARGET/]release/pgp_port, as cargo would.
   defp fake_cargo(tmp_dir) do
     path = Path.join(tmp_dir, "cargo")
 
     File.write!(path, """
     #!/bin/sh
     echo "$@" > #{Path.join(tmp_dir, "cargo-args")}
-    mkdir -p target/release
-    printf '#!/bin/sh\\necho built\\n' > target/release/pgp_port
+    if [ "$4" = --target ]; then dir="target/$5/release" suffix=" for $5"; else dir=target/release suffix=; fi
+    mkdir -p "$dir"
+    printf '#!/bin/sh\\necho built%s\\n' "$suffix" > "$dir/pgp_port"
     """)
 
     File.chmod!(path, 0o755)

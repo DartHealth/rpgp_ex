@@ -169,17 +169,20 @@ defmodule RpgpEx.Installer do
 
       cargo ->
         crate = Path.join(opts[:root], "native/pgp_port")
+        # An explicit target is built for that target, never silently for the host.
+        target = if is_binary(opts[:target]) and opts[:target] != "", do: opts[:target]
+        target_args = if target, do: ["--target", target], else: []
 
-        case System.cmd(cargo, ["build", "--release", "--locked"], cd: crate, stderr_to_stdout: true) do
-          {_, 0} -> with :ok <- put(opts[:dest], File.read!(built_binary(crate))), do: {:ok, :built}
+        case System.cmd(cargo, ["build", "--release", "--locked"] ++ target_args, cd: crate, stderr_to_stdout: true) do
+          {_, 0} -> with :ok <- put(opts[:dest], File.read!(built_binary(crate, target))), do: {:ok, :built}
           {output, status} -> {:error, "cargo build failed (exit #{status}):\n#{output}"}
         end
     end
   end
 
-  defp built_binary(crate) do
+  defp built_binary(crate, target) do
     target_dir = Path.expand(System.get_env("CARGO_TARGET_DIR") || "target", crate)
-    Path.join([target_dir, "release", "pgp_port"])
+    Path.join([target_dir, target || "", "release", "pgp_port"])
   end
 
   defp put(path, contents, mode \\ 0o755) do

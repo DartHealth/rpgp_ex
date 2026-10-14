@@ -58,7 +58,7 @@ Use a Curve25519 (Cv25519) key for decryption. Encrypting to an RSA public key i
 
 Requires Elixir 1.18+ and Rust 1.88+. In this repository `mix compile` builds `native/pgp_port`
 with cargo (`config/config.exs` sets `build_from_source`). Releases are described in
-[RELEASING.md](RELEASING.md).
+[RELEASING.md](https://github.com/DartHealth/rpgp_ex/blob/main/RELEASING.md).
 
 ## License
 
