@@ -1,0 +1,161 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+env:
+  # The toolchain CI builds and lints with. The crate's minimum (rust-version in Cargo.toml) is
+  # checked separately by the msrv job.
+  RUST_TOOLCHAIN: "1.98.1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # x86_64 Linux and arm64 macOS: arm64 exercises the aes_armv8 build cfg.
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: native/pgp_port
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component clippy,rustfmt
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: rustfmt
+        run: cargo fmt --check
+
+      - name: clippy
+        run: cargo clippy --locked --all-targets -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked
+
+  msrv:
+    name: Rust minimum version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Builds with the rust-version declared in Cargo.toml, which is what a user without a
+      # prebuilt binary needs to build pgp_port from source.
+      - name: Build with the declared rust-version
+        working-directory: native/pgp_port
+        run: |
+          msrv=$(sed -n 's/^rust-version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "rust-version: $msrv"
+          rustup toolchain install "$msrv" --profile minimal
+          cargo "+$msrv" build --locked --release
+
+  cargo-deny:
+    name: cargo-deny (licences, advisories, sources)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The prebuilt binaries bundle the whole dependency tree, so its licences and RustSec
+      # advisories are checked here. Configuration: native/pgp_port/deny.toml.
+      - name: cargo deny check
+        uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          manifest-path: native/pgp_port/Cargo.toml
+
+  elixir:
+    name: Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # The oldest supported versions.
+          - elixir: "1.18"
+            otp: "26"
+          # The newest, which also runs the format and warnings checks.
+          - elixir: "1.20.2"
+            otp: "29.0.4"
+            lint: true
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Install Elixir and OTP
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Check formatting
+        if: matrix.lint
+        run: mix format --check-formatted
+
+      - name: Compile without warnings
+        if: matrix.lint
+        run: mix compile --warnings-as-errors
+
+      # gpg_agent: GnuPG decrypts what we encrypt. The runner image ships GnuPG.
+      - name: mix test
+        run: |
+          gpg --version | head -1
+          mix test --include gpg_agent
+
+  elixir-macos:
+    name: Elixir (macOS arm64, Homebrew)
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      # setup-beam does not support macOS, so this job runs whatever Elixir Homebrew ships. GnuPG
+      # from Homebrew is a newer release than the Linux runner's, so the interop test covers both.
+      - name: Install Elixir and GnuPG
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          brew install elixir gnupg
+          elixir --version
+          gpg --version | head -1
+
+      - name: mix test
+        run: mix test --include gpg_agent

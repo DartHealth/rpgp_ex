@@ -1,0 +1,63 @@
+name: GitHub Actions Scan
+
+# Security (zizmor) and correctness (actionlint) scanning of this repository's own workflows.
+# Each job fails on any finding, and reports findings as annotations on its check run.
+# GitHub renders at most 10 annotations per step, so the job log is the complete list.
+#
+# Run both locally before pushing a workflow change. Without a token zizmor skips its online
+# audits, so a local pass can still fail here:
+#
+#   GH_TOKEN=$(gh auth token) zizmor .
+#   actionlint
+#
+# Rules for workflow code: pin every action to a full commit SHA with the exact version tag in a
+# comment (# v7.0.1, never # v7); never put ${{ }} inside a run: script (pass values through env:).
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  zizmor:
+    name: zizmor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4
+        with:
+          # Annotations, not SARIF: in SARIF mode zizmor exits 0 whatever it finds, which would
+          # turn this gate into an advisory check.
+          advanced-security: false
+          annotations: true
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Turns actionlint's output into annotations. The matcher file is upstream's, copied
+      # verbatim at the same version as the image below.
+      - name: Register actionlint problem matcher
+        run: echo "::add-matcher::.github/actionlint-matcher.json"
+
+      # The image bundles shellcheck, so run: blocks are checked too.
+      - name: Run actionlint
+        uses: docker://rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667
+        with:
+          args: -color

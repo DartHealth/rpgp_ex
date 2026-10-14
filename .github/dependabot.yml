@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: cargo
+    directory: "/native/pgp_port"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    # rPGP is 0.x: each minor release may break the API and needs the full fixture and interop
+    # suite, so it gets a pull request of its own.
+    groups:
+      dependencies:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "pgp"

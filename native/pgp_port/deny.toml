@@ -1,0 +1,38 @@
+# cargo-deny policy (https://embarkstudios.github.io/cargo-deny/). The prebuilt pgp_port binaries
+# bundle every dependency, so their licences must be compatible with shipping it under
+# MIT OR Apache-2.0, and no dependency may carry an unaddressed RustSec advisory.
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities, unsound and unmaintained crates are reported from the RustSec database.
+# To accept one, list its ID here with a reason.
+ignore = [
+  # Marvin: rsa's private-key operations are not constant-time (via pgp). No fixed release exists.
+  # Encrypting to an RSA public key is unaffected; the README recommends Cv25519 decryption keys.
+  { id = "RUSTSEC-2023-0071", reason = "No fix upstream; RSA private-key timing only, see README Security" },
+]
+
+[licenses]
+# Every licence the dependency tree uses today. Add one only after checking it permits
+# redistribution in a binary under MIT OR Apache-2.0.
+allow = [
+  "Apache-2.0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "MIT",
+  "Unicode-3.0",
+  "Zlib",
+  # libbz2-rs-sys, rPGP's pure-Rust bzip2.
+  "bzip2-1.0.6",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
