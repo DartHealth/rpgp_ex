@@ -1,0 +1,8 @@
+# Use the ARMv8 AES instructions. aes 0.8 (pulled in by rPGP 0.20) only compiles its ARMv8 backend
+# behind this cfg; without it, AES-256-CFB runs in software, about 10x slower on Apple M-series.
+# On Linux and macOS the crate detects the instructions at runtime and falls back to software.
+# Cargo reads this file only when it runs in this directory, and a RUSTFLAGS (or
+# CARGO_ENCODED_RUSTFLAGS) environment variable replaces it entirely: release builds must set the
+# cfg themselves.
+[target.'cfg(all(target_arch = "aarch64", any(target_os = "macos", target_os = "linux")))']
+rustflags = ["--cfg", "aes_armv8"]

@@ -1,0 +1,10 @@
+/_build/
+/deps/
+/doc/
+/.cargo-home/
+/native/*/target/
+/priv/bin/
+*.partial
+erl_crash.dump
+*.ez
+rpgp_ex-*.tar
