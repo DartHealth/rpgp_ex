@@ -9,7 +9,7 @@ repository = "https://github.com/DartHealth/rpgp_ex"
 publish = false
 
 [dependencies]
-pgp = "0.20"
+pgp = "0.21"
 rand = "0.8"
 hex = "0.4"
 serde = { version = "1", features = ["derive"] }
