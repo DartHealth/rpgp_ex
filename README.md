@@ -5,6 +5,29 @@ pure-Rust OpenPGP implementation. No `gpg` executable or C crypto library is inv
 
 > **Status:** pre-release. Not yet published to Hex; the API may change before 0.1.0.
 
+## Installation
+
+```elixir
+def deps do
+  [{:rpgp_ex, github: "DartHealth/rpgp_ex", tag: "v0.1.0"}]
+end
+```
+
+Compiling rpgp_ex installs its native executable, `pgp_port`, into its `priv/bin`, so it
+ships in `mix release`. On macOS (arm64 and x86_64) and Linux (arm64 and x86_64, any libc)
+it downloads a prebuilt binary from this repository's GitHub releases, and installs it only if
+the binary's sha256 matches `checksums-pgp_port.exs` in the package. Elsewhere it builds
+`pgp_port` from source, which needs Rust 1.88 or later. To change this, set one of these in
+`config/config.exs`:
+
+- `pgp_port_path: "/path/to/pgp_port"` to run a binary you provide;
+- `build_from_source: true` to always build with cargo;
+- `artifact_base_url: "https://..."` to download from a mirror.
+
+When you build a release for another platform, such as a Linux image on a Mac, set
+`RPGP_EX_TARGET` (for example `x86_64-unknown-linux-musl`) when compiling. When the
+application starts, it logs a warning if `pgp_port` is missing or is from another version.
+
 ## How it works
 
 Each operation runs one short-lived native process (`pgp_port`) over an Erlang Port. File
@@ -33,7 +56,9 @@ Use a Curve25519 (Cv25519) key for decryption. Encrypting to an RSA public key i
 
 ## Development
 
-Requires Elixir 1.18+ and Rust 1.88+. `mix test` builds `native/pgp_port` with cargo first.
+Requires Elixir 1.18+ and Rust 1.88+. In this repository `mix compile` builds `native/pgp_port`
+with cargo (`config/config.exs` sets `build_from_source`). Releases are described in
+[RELEASING.md](https://github.com/DartHealth/rpgp_ex/blob/main/RELEASING.md).
 
 ## License
 

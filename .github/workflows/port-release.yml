@@ -1,0 +1,215 @@
+name: Port release
+
+# Builds the pgp_port executable for the four release targets and checks that the installer
+# can download, verify and run what was built. On a pgp_port-v<version> tag it then publishes
+# the archives and checksums-pgp_port.exs as a GitHub release. See RELEASING.md.
+#
+# Every target builds on a native runner, so no cross-compiler or container is involved, and
+# every binary is run before it ships. Linux ships static musl executables only: they have no
+# libc dependency, so one file per architecture runs on glibc and musl distributions alike.
+
+on:
+  push:
+    tags:
+      - "pgp_port-v*"
+  pull_request:
+    paths:
+      - ".github/workflows/port-release.yml"
+      - ".github/scripts/verify-installer.sh"
+      - "lib/mix/tasks/compile.pgp_port.ex"
+      - "lib/rpgp_ex/installer.ex"
+      - "native/pgp_port/**"
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  RUST_TOOLCHAIN: "1.98.1"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            os: macos-15
+            rustflags: "--cfg aes_armv8"
+          - target: x86_64-apple-darwin
+            os: macos-15-intel
+            rustflags: ""
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-24.04-arm
+            rustflags: "--cfg aes_armv8"
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-24.04
+            rustflags: ""
+    env:
+      TARGET: ${{ matrix.target }}
+      # RUSTFLAGS replaces the rustflags in native/pgp_port/.cargo/config.toml, so every row
+      # states its own: aarch64 needs --cfg aes_armv8 for hardware AES.
+      RUSTFLAGS: ${{ matrix.rustflags }}
+    defaults:
+      run:
+        working-directory: native/pgp_port
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the crate version
+        id: version
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n 1)
+          test -n "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: The tag must match the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if [ "$GITHUB_REF_NAME" != "pgp_port-v$VERSION" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match Cargo.toml version $VERSION"
+            exit 1
+          fi
+
+      - name: aarch64 builds must enable hardware AES
+        if: startsWith(matrix.target, 'aarch64-')
+        run: |
+          case " $RUSTFLAGS " in
+            *" --cfg aes_armv8 "*) echo "RUSTFLAGS=$RUSTFLAGS" ;;
+            *) echo "::error::aarch64 build without --cfg aes_armv8 (RUSTFLAGS='$RUSTFLAGS')"; exit 1 ;;
+          esac
+
+      - name: Install Rust
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target "$TARGET"
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: Build
+        run: cargo build --release --locked --target "$TARGET"
+
+      - name: Run it
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          out=$("target/$TARGET/release/pgp_port" --version)
+          echo "$out"
+          test "$out" = "{\"ok\":true,\"version\":\"$VERSION\"}"
+
+      - name: Linux binaries must be static
+        if: contains(matrix.target, 'linux-musl')
+        run: file "target/$TARGET/release/pgp_port" | tee /dev/stderr | grep -Eq "statically linked|static-pie linked"
+
+      - name: Package
+        id: package
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          name="pgp_port-v$VERSION-$TARGET.tar.gz"
+          chmod 0755 "target/$TARGET/release/pgp_port"
+          tar -C "target/$TARGET/release" -czf "$GITHUB_WORKSPACE/$name" pgp_port
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the archive
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.package.outputs.name }}
+          path: ${{ steps.package.outputs.name }}
+          if-no-files-found: error
+          retention-days: 7
+
+  verify:
+    name: Checksums and installer check
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the archives
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: pgp_port-v*.tar.gz
+          path: dist
+          merge-multiple: true
+
+      # The same map format as RustlerPrecompiled's checksum files. It ships in the Hex package
+      # and in git, and the installer refuses any download that does not match it.
+      - name: Write checksums-pgp_port.exs
+        run: |
+          {
+            echo "%{"
+            for path in dist/pgp_port-v*.tar.gz; do
+              echo "  \"${path#dist/}\" => \"sha256:$(sha256sum "$path" | cut -d' ' -f1)\","
+            done
+            echo "}"
+          } > dist/checksums-pgp_port.exs
+          cat dist/checksums-pgp_port.exs
+          test "$(grep -c 'sha256:' dist/checksums-pgp_port.exs)" = 4
+
+      - name: Install Elixir and OTP
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: "1.20.2"
+          otp-version: "29.0.4"
+
+      # A consumer project downloads the x86_64 Linux archive from a local server, verifies it
+      # against the checksum file and runs an encrypt/decrypt round trip.
+      - name: Install from the archives as a dependency would
+        run: .github/scripts/verify-installer.sh dist
+
+      - name: Upload the checksum file
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: checksums-pgp_port.exs
+          path: dist/checksums-pgp_port.exs
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish the GitHub release
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/pgp_port-v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      # contents: create the release. id-token and attestations: build provenance.
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the archives and checksum file
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/pgp_port-v*.tar.gz
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l dist
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Prebuilt pgp_port executables for rpgp_ex. Commit checksums-pgp_port.exs to the repository root before tagging the rpgp_ex release that uses them (see RELEASING.md)."

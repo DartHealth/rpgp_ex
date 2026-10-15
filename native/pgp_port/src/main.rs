@@ -35,6 +35,8 @@ fn run(args: &[String]) -> Result<Value, Failure> {
             &read_stdin_json()?,
         ),
         "inspect-key" => keys::inspect(&read_stdin_json()?),
+        // The Elixir side compares this with the version it was built for.
+        "--version" => Ok(json!({"version": env!("CARGO_PKG_VERSION")})),
         other => Err(Failure::new(Code::Usage, format!("unknown command {other}"))),
     }
 }
