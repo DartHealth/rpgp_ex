@@ -166,5 +166,9 @@ jobs:
           elixir --version
           gpg --version | head -1
 
+      # Homebrew's Elixir has no Hex, and Mix needs it to resolve even a dev-only Hex dependency.
+      - name: Install Hex
+        run: mix local.hex --force
+
       - name: mix test
         run: mix test --include gpg_agent
