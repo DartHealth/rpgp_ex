@@ -28,3 +28,11 @@ updates:
           - "*"
         exclude-patterns:
           - "pgp"
+
+  # ex_doc, the only Mix dependency, is dev-only.
+  - package-ecosystem: mix
+    directory: "/"
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

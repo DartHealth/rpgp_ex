@@ -15,7 +15,8 @@ defmodule RpgpEx.MixProject do
       deps: deps(),
       description: "OpenPGP encryption and decryption backed by rPGP, a pure-Rust implementation",
       package: package(),
-      source_url: @source_url
+      source_url: @source_url,
+      docs: docs()
     ]
   end
 
@@ -27,15 +28,25 @@ defmodule RpgpEx.MixProject do
     ]
   end
 
-  defp deps, do: []
+  defp deps do
+    [{:ex_doc, "~> 0.40", only: :dev, runtime: false}]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md", "SECURITY.md"],
+      source_ref: "v#{@version}"
+    ]
+  end
 
   defp package do
     [
       licenses: ["MIT", "Apache-2.0"],
-      links: %{"GitHub" => @source_url},
+      links: %{"GitHub" => @source_url, "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"},
       # native/pgp_port is the cargo fallback; checksums-pgp_port.exs verifies the downloads.
       files: ~w(
-        lib mix.exs README.md LICENSE-MIT LICENSE-APACHE checksums-pgp_port.exs
+        lib mix.exs README.md CHANGELOG.md SECURITY.md LICENSE-MIT LICENSE-APACHE checksums-pgp_port.exs
         native/pgp_port/src native/pgp_port/Cargo.toml native/pgp_port/Cargo.lock native/pgp_port/.cargo
       )
     ]
