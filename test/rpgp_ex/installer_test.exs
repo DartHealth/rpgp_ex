@@ -100,6 +100,22 @@ defmodule RpgpEx.InstallerTest do
       end
     end
 
+    test "follows redirects, as GitHub's release downloads need", %{root: root, www: www, opts: opts} do
+      publish(www, root, tarball([{"pgp_port", @binary}]))
+      redirector = start_redirector(fn _self -> opts[:artifact_base_url] <> "/" <> @artifact end)
+
+      assert Installer.install(Keyword.put(opts, :artifact_base_url, redirector)) == {:ok, :installed}
+      assert File.read!(opts[:dest]) == @binary
+    end
+
+    test "gives up on a redirect loop", %{root: root, www: www, opts: opts} do
+      publish(www, root, tarball([{"pgp_port", @binary}]))
+      redirector = start_redirector(fn self -> self <> "/again" end)
+
+      assert {:error, message} = Installer.install(Keyword.put(opts, :artifact_base_url, redirector))
+      assert message =~ "too many redirects"
+    end
+
     test "reports a failed download", %{root: root, opts: opts} do
       write_checksums(root, %{@artifact => "sha256:" <> String.duplicate("0", 64)})
 
@@ -221,6 +237,12 @@ defmodule RpgpEx.InstallerTest do
       assert {_, [proxy_auth: {~c"a", ~c"1"}]} = Installer.proxy_settings("http://mirror.example/x", &env[&1])
     end
 
+    test "HTTPS without HTTPS_PROXY goes through HTTP_PROXY, as httpc does, with its credentials" do
+      env = %{"HTTP_PROXY" => "http://a:1@plain.example:3128"}
+
+      assert {[proxy: _], [proxy_auth: {~c"a", ~c"1"}]} = Installer.proxy_settings("https://github.com/x", &env[&1])
+    end
+
     test "a user without a password, and no proxy at all" do
       env = %{"HTTPS_PROXY" => "http://token@proxy.example:3128"}
       assert {_, [proxy_auth: {~c"token", ~c""}]} = Installer.proxy_settings("https://github.com/x", &env[&1])
@@ -244,6 +266,24 @@ defmodule RpgpEx.InstallerTest do
       )
 
     {"http://127.0.0.1:#{:httpd.info(pid)[:port]}", pid}
+  end
+
+  # Answers every request with a 302 to `location.(its own base URL)`.
+  defp start_redirector(location) do
+    {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, ip: {127, 0, 0, 1}])
+    {:ok, port} = :inet.port(listen)
+    base = "http://127.0.0.1:#{port}"
+    response = "HTTP/1.1 302 Found\r\nlocation: #{location.(base)}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+    start_supervised!({Task, fn -> redirect_forever(listen, response) end})
+    base
+  end
+
+  defp redirect_forever(listen, response) do
+    {:ok, socket} = :gen_tcp.accept(listen)
+    {:ok, _request} = :gen_tcp.recv(socket, 0)
+    :ok = :gen_tcp.send(socket, response)
+    :gen_tcp.close(socket)
+    redirect_forever(listen, response)
   end
 
   defp tarball(entries) do

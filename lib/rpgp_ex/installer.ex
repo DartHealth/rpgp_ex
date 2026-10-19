@@ -22,6 +22,7 @@ defmodule RpgpEx.Installer do
                      end)
 
   @checksums "checksums-pgp_port.exs"
+  @max_redirects 5
   @repository "https://github.com/DartHealth/rpgp_ex"
 
   @doc "The pgp_port version this release of rpgp_ex was built for (the crate's version)."
@@ -210,7 +211,7 @@ defmodule RpgpEx.Installer do
       {:error, {:already_started, _}} -> :ok
     end
 
-    {proxies, proxy_auth} = proxy_settings(url)
+    {proxies, _proxy_auth} = proxy_settings(url)
     :ok = :httpc.set_options(proxies, profile)
 
     ssl = [
@@ -220,12 +221,36 @@ defmodule RpgpEx.Installer do
       customize_hostname_check: [match_fun: :public_key.pkix_verify_hostname_match_fun(:https)]
     ]
 
-    http_opts = [ssl: ssl, timeout: 120_000, connect_timeout: 30_000, autoredirect: true] ++ proxy_auth
+    fetch(url, profile, ssl, @max_redirects)
+  end
+
+  # Redirects are followed here, not by httpc, so that each hop sends the credentials of the
+  # proxy serving its own scheme: httpc would resend the first request's proxy_auth.
+  defp fetch(url, profile, ssl, redirects_left) do
+    {_proxies, proxy_auth} = proxy_settings(url)
+    http_opts = [ssl: ssl, timeout: 120_000, connect_timeout: 30_000, autoredirect: false] ++ proxy_auth
 
     case :httpc.request(:get, {String.to_charlist(url), []}, http_opts, [body_format: :binary], profile) do
-      {:ok, {{_, 200, _}, _headers, body}} -> {:ok, body}
-      {:ok, {{_, status, _}, _headers, _body}} -> {:error, "could not download #{url}: HTTP #{status}"}
-      {:error, reason} -> {:error, "could not download #{url}: #{inspect(reason)}"}
+      {:ok, {{_, 200, _}, _headers, body}} ->
+        {:ok, body}
+
+      {:ok, {{_, status, _}, headers, _body}} when status in [301, 302, 303, 307, 308] ->
+        case List.keyfind(headers, ~c"location", 0) do
+          _ when redirects_left == 0 ->
+            {:error, "could not download #{url}: too many redirects"}
+
+          {_, location} ->
+            fetch(url |> URI.merge(List.to_string(location)) |> URI.to_string(), profile, ssl, redirects_left - 1)
+
+          nil ->
+            {:error, "could not download #{url}: HTTP #{status} without a location"}
+        end
+
+      {:ok, {{_, status, _}, _headers, _body}} ->
+        {:error, "could not download #{url}: HTTP #{status}"}
+
+      {:error, reason} ->
+        {:error, "could not download #{url}: #{inspect(reason)}"}
     end
   end
 
@@ -252,8 +277,9 @@ defmodule RpgpEx.Installer do
     options =
       for {key, %URI{host: host, port: port}} <- proxies, do: {key, {{String.to_charlist(host), port}, no_proxy}}
 
-    serving = if URI.parse(url).scheme == "https", do: :https_proxy, else: :proxy
-    {options, proxy_auth(proxies[serving])}
+    # Like httpc, HTTPS goes through HTTP_PROXY when HTTPS_PROXY is not set.
+    serving = if URI.parse(url).scheme == "https", do: proxies[:https_proxy] || proxies[:proxy], else: proxies[:proxy]
+    {options, proxy_auth(serving)}
   end
 
   defp proxy_auth(%URI{userinfo: userinfo}) when is_binary(userinfo) do
