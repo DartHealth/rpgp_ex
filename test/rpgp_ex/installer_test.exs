@@ -192,6 +192,43 @@ defmodule RpgpEx.InstallerTest do
     assert message =~ "checksums-pgp_port.exs"
   end
 
+  describe "proxy_settings/2" do
+    test "reads HTTP_PROXY, HTTPS_PROXY and NO_PROXY" do
+      env = %{
+        "HTTP_PROXY" => "http://plain.example:3128",
+        "https_proxy" => "http://secure.example:8080",
+        "NO_PROXY" => "localhost, .internal.example"
+      }
+
+      assert Installer.proxy_settings("https://github.com/x", &env[&1]) ==
+               {[
+                  proxy: {{~c"plain.example", 3128}, [~c"localhost", ~c".internal.example"]},
+                  https_proxy: {{~c"secure.example", 8080}, [~c"localhost", ~c".internal.example"]}
+                ], []}
+    end
+
+    test "passes credentials in the proxy URL as proxy_auth, decoded" do
+      env = %{"HTTPS_PROXY" => "http://us%40er:p%3Ass@proxy.example:3128"}
+
+      assert {[https_proxy: {{~c"proxy.example", 3128}, []}], [proxy_auth: {~c"us@er", ~c"p:ss"}]} =
+               Installer.proxy_settings("https://github.com/x", &env[&1])
+    end
+
+    test "uses the credentials of the proxy that serves the URL's scheme" do
+      env = %{"HTTP_PROXY" => "http://a:1@plain.example:3128", "HTTPS_PROXY" => "http://b:2@secure.example:3128"}
+
+      assert {_, [proxy_auth: {~c"b", ~c"2"}]} = Installer.proxy_settings("https://github.com/x", &env[&1])
+      assert {_, [proxy_auth: {~c"a", ~c"1"}]} = Installer.proxy_settings("http://mirror.example/x", &env[&1])
+    end
+
+    test "a user without a password, and no proxy at all" do
+      env = %{"HTTPS_PROXY" => "http://token@proxy.example:3128"}
+      assert {_, [proxy_auth: {~c"token", ~c""}]} = Installer.proxy_settings("https://github.com/x", &env[&1])
+
+      assert Installer.proxy_settings("https://github.com/x", fn _ -> nil end) == {[], []}
+    end
+  end
+
   ## Helpers
 
   defp start_httpd(www) do
