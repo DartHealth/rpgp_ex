@@ -24,6 +24,9 @@ the binary's sha256 matches `checksums-pgp_port.exs` in the package. Elsewhere i
 - `build_from_source: true` to always build with cargo;
 - `artifact_base_url: "https://..."` to download from a mirror.
 
+Downloads honour `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`, including credentials in the proxy
+URL (`http://user:password@proxy:3128`).
+
 When you build a release for another platform, such as a Linux image on a Mac, set
 `RPGP_EX_TARGET` (for example `x86_64-unknown-linux-musl`) when compiling. When the
 application starts, it logs a warning if `pgp_port` is missing or is from another version.
