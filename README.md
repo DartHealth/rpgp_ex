@@ -3,7 +3,7 @@
 OpenPGP encryption and decryption for Elixir, backed by [rPGP](https://github.com/rpgp/rpgp), a
 pure-Rust OpenPGP implementation. No `gpg` executable or C crypto library is involved.
 
-> **Status:** pre-release. Not yet published to Hex; the API may change before 0.1.0.
+> **Status:** 0.1.0, installed from GitHub. Not yet published to Hex; the API may change before 1.0.
 
 ## Installation
 
