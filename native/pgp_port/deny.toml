@@ -14,8 +14,9 @@ ignore = [
   { id = "RUSTSEC-2023-0071", reason = "No fix upstream; RSA private-key timing only, see README Security" },
   # crypto-bigint 0.5 operations meant to be constant-time can branch on secrets (via pgp's
   # RustCrypto 0.13 curves and cx448). Fixed only in 0.7.6+, which pgp 0.21 cannot use.
-  # Affects NIST P-curve and X448 secret keys; Cv25519 does not use crypto-bigint.
-  { id = "RUSTSEC-2026-0387", reason = "No 0.5 fix; P-curve/X448 secret-key timing only, see README Security" },
+  # Affects NIST P-curve and X448 decryption, and each encryption's one-time ECDH secret;
+  # Cv25519 does not use crypto-bigint.
+  { id = "RUSTSEC-2026-0387", reason = "No 0.5 fix; P-curve/X448 ECDH timing only, see README Security" },
 ]
 
 [licenses]
