@@ -72,8 +72,13 @@ fingerprints and error codes, never keys, passphrases or plaintext.
 - **Use a Curve25519 (Cv25519) key.** Decrypting with an RSA secret key uses the `rsa` crate,
   whose private-key operations are not constant-time
   ([RUSTSEC-2023-0071](https://rustsec.org/advisories/RUSTSEC-2023-0071), the Marvin attack; no
-  fixed release exists). An attacker who can time many decryptions may recover the key.
-  Encrypting to an RSA public key is unaffected.
+  fixed release exists). NIST P-256/P-384/P-521 and X448 secret keys use `crypto-bigint` 0.5,
+  some of whose operations meant to be constant-time are not
+  ([RUSTSEC-2026-0387](https://rustsec.org/advisories/RUSTSEC-2026-0387); fixed only in 0.7.6+,
+  which rPGP 0.21 cannot use). An attacker who can time many decryptions may recover the key.
+  Encrypting to an RSA public key is unaffected. Encrypting to a NIST P-curve or X448 public key
+  never uses the recipient's secret key, but each message's one-time ECDH secret goes through
+  `crypto-bigint`, so observing that one operation could reveal that message's session key.
 - **Leave AEAD out of the key's preferences** if you want senders to use SEIPDv1. GnuPG 2.4 and
   later send OCB to any key that advertises AEAD, which GnuPG's default preferences do. rpgp_ex
   decrypts both, but SEIPDv1 streams in a few MiB, while OCB holds a chunk of up to 4 MiB in
